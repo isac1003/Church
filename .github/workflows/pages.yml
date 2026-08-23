@@ -1,0 +1,47 @@
+# GitHub Pages 배포
+#
+# main 에 올라가면 자동으로 사이트를 다시 만듭니다.
+# configure-pages 의 enablement 가 켜져 있어서, Settings 에서 따로
+# Pages 를 켜지 않아도 이 워크플로가 처음 돌 때 알아서 켜집니다.
+name: 사이트 배포
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Pages 설정 (없으면 켜기)
+        uses: actions/configure-pages@v5
+        with:
+          enablement: true
+
+      - name: 올릴 파일만 모으기
+        run: |
+          mkdir -p _site
+          cp index.html robots.txt _site/
+          touch _site/.nojekyll
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+
+      - id: deployment
+        uses: actions/deploy-pages@v4
