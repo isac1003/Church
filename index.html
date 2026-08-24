@@ -358,7 +358,8 @@ header .me b{display:block;font-size:13px;color:var(--ink-2);font-weight:600}
  */
 var DEFAULT_API = '';
 
-var LS = { api: 'church.api', token: 'church.token', cache: 'church.cache', last: 'church.lastUser' };
+var LS = { api: 'church.api', token: 'church.token', cache: 'church.cache',
+           last: 'church.lastUser', nocache: 'church.nocache' };
 
 function isWebAppUrl(u) {
   return /^https:\/\/script\.google\.com\/macros\/s\/[\w-]+\/exec(\?|$)/.test(String(u || '').trim());
@@ -466,21 +467,46 @@ function handleError(err) {
 var CACHED = ['me', 'members', 'prayers', 'visits', 'accounts',
               'dashboard', 'mokjangs', 'soons', 'options'];
 
-function saveCache() {
+/** 이 기기에 자료를 남기지 않도록 해두셨는지 */
+function noCache() {
+  try { return localStorage.getItem(LS.nocache) === '1'; } catch (e) { return false; }
+}
+
+/** 로그인 토큰에 적힌 만료 시각 (서명은 서버가 확인하므로 여기서는 읽기만 합니다) */
+function tokenExpiry() {
   try {
-    var o = {};
+    var payload = String(state.token).split('.')[0].replace(/-/g, '+').replace(/_/g, '/');
+    return Number(JSON.parse(atob(payload)).exp) || 0;
+  } catch (e) { return 0; }
+}
+
+function dropCache() {
+  try { localStorage.removeItem(LS.cache); } catch (e) {}
+}
+
+/**
+ * 명단을 이 기기에 복사해 둡니다. 다음에 열 때 기다리지 않으려고요.
+ * 다만 로그인보다 오래 남지는 않습니다 — 만료 시각을 함께 적어두고,
+ * 지난 복사본은 읽지 않고 지웁니다.
+ */
+function saveCache() {
+  if (noCache()) { dropCache(); return; }
+  try {
+    var o = { exp: tokenExpiry() };
     CACHED.forEach(function (k) { o[k] = state.data[k]; });
     localStorage.setItem(LS.cache, JSON.stringify(o));
   } catch (e) { /* 저장 공간이 없으면 넘어갑니다 */ }
 }
 
 function loadCache() {
+  if (noCache()) { dropCache(); return false; }
   try {
     var c = JSON.parse(localStorage.getItem(LS.cache) || 'null');
     if (!c || !c.me) return false;
+    if (!c.exp || c.exp < Date.now()) { dropCache(); return false; }
     CACHED.forEach(function (k) { if (c[k] !== undefined) state.data[k] = c[k]; });
     return true;
-  } catch (e) { return false; }
+  } catch (e) { dropCache(); return false; }
 }
 
 /* ── 시작 ─────────────────────────────────────────────── */
@@ -611,7 +637,7 @@ function sync(showSpinner) {
 
 function logout() {
   localStorage.removeItem(LS.token);
-  localStorage.removeItem(LS.cache);
+  dropCache();
   state.token = '';
   state.data = JSON.parse(JSON.stringify(EMPTY));
   state.attend = { date: '', records: {}, base: {}, loading: false, loaded: false, loadedDate: '' };
@@ -1500,6 +1526,12 @@ function menuSheet() {
       '<div><div class="nm">' + esc(m.name || '') + '</div>' +
       '<div class="sub">' + esc(m.role || '') + ' · ' + esc(m.scope || '') + '</div></div>' +
     '</div></div>' +
+    '<div class="field inline" style="margin-bottom:6px">' +
+      '<input type="checkbox" id="mn-nocache"' + (noCache() ? ' checked' : '') + '>' +
+      '<label for="mn-nocache">이 기기에 자료 남기지 않기</label></div>' +
+    '<p class="scope-tag" style="margin:0 2px 16px">' +
+      '앱은 빨리 열리라고 명단을 이 기기에 복사해 둡니다. 공용 기기나 남의 기기라면 ' +
+      '켜 두세요. 아무것도 남지 않는 대신 열 때마다 잠깐 기다리게 됩니다.</p>' +
     '<div class="field"><button class="btn-primary" id="mn-pw" type="button" ' +
       'style="background:var(--card);color:var(--ink);border:1px solid var(--line)">' +
       '비밀번호 바꾸기</button></div>' +
@@ -1507,9 +1539,24 @@ function menuSheet() {
       'style="background:var(--card);color:var(--danger);border:1px solid var(--line)">' +
       '로그아웃</button></div>' +
     '<p class="scope-tag" style="text-align:center;margin-top:14px">' +
-      '자료는 구글 시트에 저장됩니다. 시트를 직접 열어 고쳐도 그대로 반영됩니다.</p>',
+      '자료는 구글 시트에 저장됩니다. 시트를 직접 열어 고쳐도 그대로 반영됩니다.<br>' +
+      '기기에 남은 복사본은 로그아웃하거나 로그인이 풀리면 함께 지워집니다.</p>',
     null, null, true
   );
+
+  $('#mn-nocache').addEventListener('change', function () {
+    try {
+      if (this.checked) {
+        localStorage.setItem(LS.nocache, '1');
+        dropCache();
+        toast('이 기기에서 지웠습니다.');
+      } else {
+        localStorage.removeItem(LS.nocache);
+        saveCache();
+        toast('이 기기에 복사해 둡니다.');
+      }
+    } catch (e) { toast('설정을 저장하지 못했습니다.', true); }
+  });
 
   $('#mn-pw').addEventListener('click', passwordForm);
   $('#mn-out').addEventListener('click', function () {
