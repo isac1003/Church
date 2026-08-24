@@ -1262,8 +1262,9 @@ function 교인_가져오기() {
   // 이름 칸 하나 + 소속 칸 하나가 있으면 명단 시트로 봅니다 (한글·영문 모두)
   const wanted = [FIELD.name, FIELD.mokjang.concat(FIELD.soon)];
 
-  // 1) 먼저 이 파일 안에서 찾습니다 (AppSheet 시트에서 스크립트를 여신 경우)
-  let found = findSourceSheet_(here, wanted);
+  // 1) 먼저 이 파일 안에서 찾습니다 (원본 시트에서 스크립트를 여신 경우)
+  let considered = [];
+  let found = usableOrNull_(findSourceSheet_(here, wanted), considered);
   let where = here.getName();
 
   // 2) 없으면 지정된 다른 파일을 엽니다
@@ -1278,16 +1279,17 @@ function 교인_가져오기() {
         throw new Error('원본 파일을 열지 못했습니다 (' + id + ').\n' +
           '같은 구글 계정의 파일인지, 주소가 맞는지 확인해 주세요.\n원래 오류: ' + e.message);
       }
-      found = findSourceSheet_(other, wanted);
+      found = usableOrNull_(findSourceSheet_(other, wanted), considered);
       where = other.getName();
     }
   }
 
   if (!found) {
-    throw new Error('교인 명단 시트를 찾지 못했습니다. ' +
-      '첫 줄에 이름 칸과 소속(목장·순) 칸이 있는 시트가 필요합니다.\n' +
-      '이 파일의 시트: ' + here.getSheets().map(function (sh) { return sh.getName(); }).join(', ') + '\n' +
-      '→ 원본_살펴보기() 를 실행하면 원본 파일의 시트와 칸 이름을 확인할 수 있습니다.');
+    throw new Error('교인 명단 시트를 찾지 못했습니다.\n' +
+      '이름 칸과 교적번호(또는 번호) 칸이 함께 채워진 시트가 필요합니다.\n' +
+      (considered.length ? '살펴본 시트: ' + considered.join(' / ') + '\n' : '') +
+      '→ 원본_살펴보기() 를 실행하면 시트와 칸 이름을 자세히 볼 수 있습니다.\n' +
+      '→ 시트를 직접 지정하려면 스크립트 속성에 IMPORT_SOURCE_SHEET 로 시트 이름을 넣으세요.');
   }
 
   const rows = found.rows;
@@ -1370,11 +1372,15 @@ function findSourceSheet_(ss, mustHave) {
   const ours = {};
   Object.keys(SHEETS).forEach(function (k) { ours[SHEETS[k].name] = true; });
 
+  // 시트를 직접 지정해 두셨으면 그것만 봅니다.
+  const forced = PropertiesService.getScriptProperties().getProperty('IMPORT_SOURCE_SHEET');
+
   const candidates = [];
   const sheets = ss.getSheets();
   for (let i = 0; i < sheets.length; i++) {
     const sh = sheets[i];
     if (ours[sh.getName()]) continue;
+    if (forced && sh.getName() !== forced) continue;
     if (sh.getLastRow() < 2 || sh.getLastColumn() < 1) continue;
 
     const headers = sh.getRange(1, 1, 1, sh.getLastColumn()).getValues()[0]
@@ -1394,14 +1400,36 @@ function findSourceSheet_(ss, mustHave) {
       rows.push(obj);
     });
 
-    candidates.push({ name: sh.getName(), rows: rows, score: scoreHeaders_(headers) });
+    // 칸 이름만 보면 출석 입력표 같은 시트도 명단처럼 보입니다.
+    // 실제로 ID 와 이름이 둘 다 있는 줄이 몇인지가 가장 확실한 신호입니다.
+    const usable = rows.filter(function (r) {
+      return String(pick_(r, FIELD.id)).trim() && String(pick_(r, FIELD.name)).trim();
+    }).length;
+
+    candidates.push({
+      name: sh.getName(), rows: rows,
+      usable: usable, score: scoreHeaders_(headers)
+    });
   }
 
   if (!candidates.length) return null;
+
   candidates.sort(function (a, b) {
-    return (b.score - a.score) || (b.rows.length - a.rows.length);
+    return (b.usable - a.usable) || (b.score - a.score) || (b.rows.length - a.rows.length);
   });
-  return candidates[0];
+
+  // 쓸 수 있는 줄이 하나도 없으면 명단 시트가 아닙니다.
+  const best = candidates[0];
+  best.considered = candidates.map(function (c) {
+    return c.name + '(' + c.usable + '/' + c.rows.length + '줄)';
+  }).join(', ');
+  return best.usable > 0 ? best : { none: true, considered: best.considered };
+}
+
+function usableOrNull_(result, collector) {
+  if (!result) return null;
+  if (result.considered) collector.push(result.considered);
+  return result.none ? null : result;
 }
 
 /** 우리가 아는 칸 이름이 몇 개나 있는지 세어 명단 시트다움을 가늠합니다. */
