@@ -1239,7 +1239,8 @@ function 교인_가져오기() {
   if (!found) {
     throw new Error('교인 명단 시트를 찾지 못했습니다. ' +
       'memberID 와 Name 칸이 첫 줄에 있는 시트가 필요합니다.\n' +
-      '이 파일의 시트: ' + here.getSheets().map(function (sh) { return sh.getName(); }).join(', '));
+      '이 파일의 시트: ' + here.getSheets().map(function (sh) { return sh.getName(); }).join(', ') + '\n' +
+      '→ 원본_살펴보기() 를 실행하면 원본 파일의 시트와 칸 이름을 확인할 수 있습니다.');
   }
 
   const rows = found.rows;
@@ -1348,4 +1349,37 @@ function pickAddress_(r) {
   return [r['Adress1'] || r['Address1'], r['Adress2'] || r['Address2']]
     .map(function (x) { return String(x || '').trim(); })
     .filter(Boolean).join(' ');
+}
+
+
+/**
+ * 원본 파일에 어떤 시트가 있고 첫 줄에 어떤 칸이 있는지만 보여줍니다.
+ * 칸 이름이 달라 가져오기가 안 될 때 무엇에 맞춰야 할지 확인하는 용도입니다.
+ * 교인 정보 자체는 찍지 않습니다.
+ */
+function 원본_살펴보기() {
+  const id = PropertiesService.getScriptProperties().getProperty('IMPORT_SOURCE_ID') ||
+             IMPORT_SOURCE_ID;
+  let ss;
+  try {
+    ss = SpreadsheetApp.openById(id);
+  } catch (e) {
+    throw new Error('원본 파일을 열지 못했습니다 (' + id + ').\n원래 오류: ' + e.message);
+  }
+
+  const lines = ['원본 파일: ' + ss.getName(), '주소: ' + ss.getUrl(), ''];
+  ss.getSheets().forEach(function (sh) {
+    const cols = sh.getLastColumn();
+    const headers = cols
+      ? sh.getRange(1, 1, 1, cols).getValues()[0]
+          .map(function (h) { return String(h).trim(); }).filter(Boolean)
+      : [];
+    lines.push('[' + sh.getName() + ']  ' + Math.max(0, sh.getLastRow() - 1) + '줄');
+    lines.push('  칸: ' + (headers.length ? headers.join(' | ') : '(비어 있음)'));
+    lines.push('');
+  });
+
+  const msg = lines.join('\n');
+  Logger.log(msg);
+  return msg;
 }
