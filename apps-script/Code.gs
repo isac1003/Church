@@ -1383,15 +1383,15 @@ function findSourceSheet_(ss, mustHave) {
     if (forced && sh.getName() !== forced) continue;
     if (sh.getLastRow() < 2 || sh.getLastColumn() < 1) continue;
 
-    const headers = sh.getRange(1, 1, 1, sh.getLastColumn()).getValues()[0]
-      .map(function (h) { return String(h).trim(); });
-    const ok = mustHave.every(function (group) {
-      const names = [].concat(group);
-      return names.some(function (h) { return headers.indexOf(h) >= 0; });
-    });
-    if (!ok) continue;
+    // 머리글이 1행이 아닐 수 있습니다. 제목 줄이 위에 붙은 시트가 흔합니다.
+    const head = findHeaderRow_(sh, mustHave);
+    if (!head) continue;
 
-    const values = sh.getRange(2, 1, sh.getLastRow() - 1, headers.length).getValues();
+    const headers = head.headers;
+    const first = head.row + 1;
+    if (sh.getLastRow() < first) continue;
+
+    const values = sh.getRange(first, 1, sh.getLastRow() - head.row, headers.length).getValues();
     const rows = [];
     values.forEach(function (row) {
       if (row.every(function (c) { return c === '' || c === null; })) return;
@@ -1407,7 +1407,7 @@ function findSourceSheet_(ss, mustHave) {
     }).length;
 
     candidates.push({
-      name: sh.getName(), rows: rows,
+      name: sh.getName(), rows: rows, headerRow: head.row,
       usable: usable, score: scoreHeaders_(headers)
     });
   }
@@ -1421,7 +1421,7 @@ function findSourceSheet_(ss, mustHave) {
   // 쓸 수 있는 줄이 하나도 없으면 명단 시트가 아닙니다.
   const best = candidates[0];
   best.considered = candidates.map(function (c) {
-    return c.name + '(' + c.usable + '/' + c.rows.length + '줄)';
+    return c.name + '(' + c.usable + '/' + c.rows.length + '줄, 머리글 ' + c.headerRow + '행)';
   }).join(', ');
   return best.usable > 0 ? best : { none: true, considered: best.considered };
 }
@@ -1430,6 +1430,28 @@ function usableOrNull_(result, collector) {
   if (!result) return null;
   if (result.considered) collector.push(result.considered);
   return result.none ? null : result;
+}
+
+/** 위에서 몇 줄을 훑어 머리글 줄을 찾습니다. 제목 줄이 붙은 시트를 위해서입니다. */
+const HEADER_SCAN_ROWS = 6;
+
+function findHeaderRow_(sh, mustHave) {
+  const scan = Math.min(HEADER_SCAN_ROWS, sh.getLastRow());
+  const width = sh.getLastColumn();
+  const top = sh.getRange(1, 1, scan, width).getValues();
+
+  let best = null;
+  for (let r = 0; r < scan; r++) {
+    const headers = top[r].map(function (h) { return String(h).trim(); });
+    const ok = mustHave.every(function (group) {
+      return [].concat(group).some(function (h) { return headers.indexOf(h) >= 0; });
+    });
+    if (!ok) continue;
+
+    const score = scoreHeaders_(headers);
+    if (!best || score > best.score) best = { row: r + 1, headers: headers, score: score };
+  }
+  return best;
 }
 
 /** 우리가 아는 칸 이름이 몇 개나 있는지 세어 명단 시트다움을 가늠합니다. */
@@ -1482,12 +1504,26 @@ function 원본_살펴보기() {
   const lines = ['원본 파일: ' + ss.getName(), '주소: ' + ss.getUrl(), ''];
   ss.getSheets().forEach(function (sh) {
     const cols = sh.getLastColumn();
-    const headers = cols
-      ? sh.getRange(1, 1, 1, cols).getValues()[0]
-          .map(function (h) { return String(h).trim(); }).filter(Boolean)
-      : [];
-    lines.push('[' + sh.getName() + ']  ' + Math.max(0, sh.getLastRow() - 1) + '줄');
-    lines.push('  칸: ' + (headers.length ? headers.join(' | ') : '(비어 있음)'));
+    const rows = sh.getLastRow();
+    lines.push('[' + sh.getName() + ']  ' + Math.max(0, rows - 1) + '줄');
+
+    if (!cols || !rows) {
+      lines.push('  (비어 있음)');
+      lines.push('');
+      return;
+    }
+
+    // 위 몇 줄 중 아는 칸 이름이 가장 많은 줄을 머리글로 봅니다
+    const scan = Math.min(HEADER_SCAN_ROWS, rows);
+    const top = sh.getRange(1, 1, scan, cols).getValues();
+    let bestRow = 1, bestScore = -1, bestHeaders = [];
+    for (let r = 0; r < scan; r++) {
+      const hs = top[r].map(function (h) { return String(h).trim(); });
+      const sc = scoreHeaders_(hs);
+      if (sc > bestScore) { bestScore = sc; bestRow = r + 1; bestHeaders = hs; }
+    }
+    lines.push('  머리글 ' + bestRow + '행 (아는 칸 ' + bestScore + '개)');
+    lines.push('  칸: ' + (bestHeaders.filter(Boolean).join(' | ') || '(비어 있음)'));
     lines.push('');
   });
 
