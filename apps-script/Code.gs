@@ -1383,3 +1383,16 @@ function 원본_살펴보기() {
   Logger.log(msg);
   return msg;
 }
+
+
+/* ── 영문 이름 (함수 목록에 한글이 안 뜰 때 이쪽을 쓰세요) ── */
+
+/** 원본_살펴보기 와 같습니다. 원본 파일의 시트·칸 이름만 보여줍니다. */
+function inspectSource() {
+  return 원본_살펴보기();
+}
+
+/** 교인_가져오기 와 같습니다. 원본에서 교인 명단을 옮겨옵니다. */
+function importMembers() {
+  return 교인_가져오기();
+}
