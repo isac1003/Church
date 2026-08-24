@@ -1204,15 +1204,42 @@ function daysUntilMonthDay_(todayStr, md) {
  * 여러 번 실행해도 같은 사람이 중복되지 않습니다 (ID 로 알아봅니다).
  */
 
-// 옮겨올 원본 시트. 주소창의 /d/ 와 /edit 사이에 있는 긴 문자열입니다.
-const IMPORT_SOURCE_ID = '15lPUY7GJ__5fHWiL8EKGVDzrqM1HdCN8WeQ5mF9iwpc';
+/**
+ * 옮겨올 원본 시트. 주소창의 /d/ 와 /edit 사이에 있는 긴 문자열입니다.
+ * 원본이 이 파일 안에 있으면 쓰이지 않습니다.
+ * 스크립트 속성에 IMPORT_SOURCE_ID 를 넣어두면 그쪽이 우선입니다.
+ */
+const IMPORT_SOURCE_ID = '1UqBnRRvnE6g3-vytpiSrzmpiV_gCAqso9VZRmYCB34w';
 
 function 교인_가져오기() {
-  const src = SpreadsheetApp.openById(IMPORT_SOURCE_ID);
-  const found = findSourceSheet_(src, ['memberID', 'Name']);
+  const here = getSS_();
+  const wanted = ['memberID', 'Name'];
+
+  // 1) 먼저 이 파일 안에서 찾습니다 (AppSheet 시트에서 스크립트를 여신 경우)
+  let found = findSourceSheet_(here, wanted);
+  let where = here.getName();
+
+  // 2) 없으면 지정된 다른 파일을 엽니다
   if (!found) {
-    throw new Error('원본에서 교인 명단 시트를 찾지 못했습니다. ' +
-                    'memberID 와 Name 칸이 있는 시트가 필요합니다.');
+    const id = PropertiesService.getScriptProperties().getProperty('IMPORT_SOURCE_ID') ||
+               IMPORT_SOURCE_ID;
+    if (id) {
+      let other;
+      try {
+        other = SpreadsheetApp.openById(id);
+      } catch (e) {
+        throw new Error('원본 파일을 열지 못했습니다 (' + id + ').\n' +
+          '같은 구글 계정의 파일인지, 주소가 맞는지 확인해 주세요.\n원래 오류: ' + e.message);
+      }
+      found = findSourceSheet_(other, wanted);
+      where = other.getName();
+    }
+  }
+
+  if (!found) {
+    throw new Error('교인 명단 시트를 찾지 못했습니다. ' +
+      'memberID 와 Name 칸이 첫 줄에 있는 시트가 필요합니다.\n' +
+      '이 파일의 시트: ' + here.getSheets().map(function (sh) { return sh.getName(); }).join(', '));
   }
 
   const rows = found.rows;
@@ -1263,7 +1290,7 @@ function 교인_가져오기() {
 
   const members = readAll_('members').map(memberToClient_);
   const msg = [
-    '가져오기가 끝났습니다. (원본 시트: ' + found.name + ')',
+    '가져오기가 끝났습니다. (' + where + ' 의 ' + found.name + ' 시트에서)',
     '  새로 등록: ' + added + '명',
     '  덮어쓰기: ' + updated + '명',
     '  건너뜀: ' + skipped + '줄 (이름이나 ID 가 없는 줄)',
