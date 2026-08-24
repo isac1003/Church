@@ -1195,3 +1195,130 @@ function daysUntilMonthDay_(todayStr, md) {
   }
   return null;
 }
+
+
+/* ══════════════════════ 기존 자료 가져오기 ══════════════════════
+ *
+ * 쓰시던 AppSheet 시트에서 교인 명단을 그대로 옮겨옵니다.
+ * 편집기에서 교인_가져오기() 를 한 번 실행하면 됩니다.
+ * 여러 번 실행해도 같은 사람이 중복되지 않습니다 (ID 로 알아봅니다).
+ */
+
+// 옮겨올 원본 시트. 주소창의 /d/ 와 /edit 사이에 있는 긴 문자열입니다.
+const IMPORT_SOURCE_ID = '15lPUY7GJ__5fHWiL8EKGVDzrqM1HdCN8WeQ5mF9iwpc';
+
+function 교인_가져오기() {
+  const src = SpreadsheetApp.openById(IMPORT_SOURCE_ID);
+  const found = findSourceSheet_(src, ['memberID', 'Name']);
+  if (!found) {
+    throw new Error('원본에서 교인 명단 시트를 찾지 못했습니다. ' +
+                    'memberID 와 Name 칸이 있는 시트가 필요합니다.');
+  }
+
+  const rows = found.rows;
+  const existing = {};
+  readAll_('members').forEach(function (m) { existing[String(m['ID'])] = m; });
+
+  const stamp = nowStamp_() + ' 가져오기';
+  const toAppend = [];
+  let added = 0, updated = 0, skipped = 0;
+
+  rows.forEach(function (r) {
+    const id = String(r['memberID'] || '').trim();
+    const name = String(r['Name'] || '').trim();
+    if (!id || !name) { skipped++; return; }
+
+    const record = {
+      'ID': id,
+      '이름': name,
+      '성별': normalizeGender_(r['gender']),
+      '생년월일': toDateStr_(r['Birthday']),
+      '음력': '',
+      '휴대전화': String(r['Phone'] || '').trim(),
+      '목장': String(r['MokName'] || '').trim(),
+      '순': normalizeSoon_(r['SoonName']),
+      '직분': String(r['ChurchRole'] || '').trim(),
+      '등록일': toDateStr_(r['JoinDate']),
+      '주소': pickAddress_(r),
+      '상태': MEMBER_STATUS.indexOf(String(r['Status'] || '').trim()) >= 0
+                ? String(r['Status']).trim() : '재적',
+      '메모': r['Family'] ? '가족: ' + String(r['Family']).trim() : '',
+      '수정일시': stamp
+    };
+
+    if (existing[id]) {
+      writeRow_('members', existing[id]._row, record);
+      updated++;
+    } else {
+      toAppend.push(rowFrom_('members', record));
+      added++;
+    }
+  });
+
+  if (toAppend.length) {
+    const sh = getSheet_('members');
+    sh.getRange(sh.getLastRow() + 1, 1, toAppend.length,
+                SHEETS.members.headers.length).setValues(toAppend);
+  }
+
+  const members = readAll_('members').map(memberToClient_);
+  const msg = [
+    '가져오기가 끝났습니다. (원본 시트: ' + found.name + ')',
+    '  새로 등록: ' + added + '명',
+    '  덮어쓰기: ' + updated + '명',
+    '  건너뜀: ' + skipped + '줄 (이름이나 ID 가 없는 줄)',
+    '',
+    '이제 교인 시트에 모두 ' + members.length + '명이 있습니다.',
+    '  목장: ' + uniqueSorted_(members.map(function (m) { return m.mokjang; })).join(', '),
+    '  순: ' + uniqueSorted_(members.map(function (m) { return m.soon; })).join(', ')
+  ].join('\n');
+  Logger.log(msg);
+  return msg;
+}
+
+/** 머리글에 지정한 칸이 모두 있는 시트를 찾아 [{칸: 값}] 으로 돌려줍니다. */
+function findSourceSheet_(ss, mustHave) {
+  const sheets = ss.getSheets();
+  for (let i = 0; i < sheets.length; i++) {
+    const sh = sheets[i];
+    if (sh.getLastRow() < 2 || sh.getLastColumn() < 1) continue;
+
+    const headers = sh.getRange(1, 1, 1, sh.getLastColumn()).getValues()[0]
+      .map(function (h) { return String(h).trim(); });
+    const ok = mustHave.every(function (h) { return headers.indexOf(h) >= 0; });
+    if (!ok) continue;
+
+    const values = sh.getRange(2, 1, sh.getLastRow() - 1, headers.length).getValues();
+    const rows = [];
+    values.forEach(function (row) {
+      if (row.every(function (c) { return c === '' || c === null; })) return;
+      const obj = {};
+      headers.forEach(function (h, j) { if (h) obj[h] = row[j]; });
+      rows.push(obj);
+    });
+    return { name: sh.getName(), rows: rows };
+  }
+  return null;
+}
+
+function normalizeGender_(v) {
+  const s = String(v || '').trim();
+  if (s.indexOf('남') === 0) return '남';
+  if (s.indexOf('여') === 0) return '여';
+  return '';
+}
+
+/** '이희상' 처럼 '순' 이 빠진 값이 섞여 있어 같은 순으로 묶이도록 맞춥니다. */
+function normalizeSoon_(v) {
+  const s = String(v || '').trim();
+  if (!s) return '';
+  return s.slice(-1) === '순' ? s : s + '순';
+}
+
+function pickAddress_(r) {
+  const full = String(r['Adress3'] || r['Address3'] || '').trim();
+  if (full) return full;
+  return [r['Adress1'] || r['Address1'], r['Adress2'] || r['Address2']]
+    .map(function (x) { return String(x || '').trim(); })
+    .filter(Boolean).join(' ');
+}
