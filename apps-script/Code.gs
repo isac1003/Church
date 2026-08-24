@@ -1211,9 +1211,56 @@ function daysUntilMonthDay_(todayStr, md) {
  */
 const IMPORT_SOURCE_ID = '1UqBnRRvnE6g3-vytpiSrzmpiV_gCAqso9VZRmYCB34w';
 
+/**
+ * 원본마다 칸 이름이 달라서, 쓸 만한 이름들을 나열해 두고 먼저 걸리는 것을 씁니다.
+ * 새 형식이 나오면 여기에 이름만 덧붙이면 됩니다.
+ */
+const FIELD = {
+  id:       ['교적번호', 'memberID', 'MemberID', 'ID', '번호'],
+  name:     ['이름', '성명', 'Name'],
+  gender:   ['성별', 'gender', 'Gender'],
+  birth:    ['생년월일', '생일', 'Birthday'],
+  realBirth:['실제생일', '양력생일'],
+  lunar:    ['양음력', '음양력', '음력'],
+  phone:    ['휴대전화', '연락처', '전화번호', 'Phone'],
+  mokjang:  ['소속목장', '목장', 'MokName'],
+  soon:     ['소속순장', '순', '순장', 'SoonName'],
+  role:     ['직분', 'ChurchRole'],
+  joined:   ['등록일', 'JoinDate'],
+  address:  ['주소', 'Adress3', 'Address3'],
+  family:   ['가족이름', '가족', 'Family'],
+  note:     ['비고', '메모', 'Note'],
+  status:   ['등록구분', '상태', 'Status']
+};
+
+/** 여러 후보 이름 중 값이 들어 있는 첫 칸을 돌려줍니다. */
+function pick_(row, names) {
+  for (let i = 0; i < names.length; i++) {
+    const v = row[names[i]];
+    if (v !== undefined && v !== null && String(v).trim() !== '') return v;
+  }
+  return '';
+}
+
+/**
+ * 생일을 정합니다.
+ * 음력을 쓰는 분은 '생년월일'이 음력이고 '실제생일'이 그해 양력입니다.
+ * 알림은 실제로 챙기는 날을 기준으로 해야 하므로 실제생일을 우선합니다.
+ * 실제생일에 연도가 없으면 생년월일의 연도를 붙여 씁니다.
+ */
+function resolveBirth_(row) {
+  const born = toDateStr_(pick_(row, FIELD.birth));
+  const real = toDateStr_(pick_(row, FIELD.realBirth));
+  if (!real) return born;
+  if (/^\d{4}-/.test(real)) return real;
+  if (/^--/.test(real) && /^\d{4}-/.test(born)) return born.slice(0, 4) + real.slice(1);
+  return real || born;
+}
+
 function 교인_가져오기() {
   const here = getSS_();
-  const wanted = ['memberID', 'Name'];
+  // 이름 칸 하나 + 소속 칸 하나가 있으면 명단 시트로 봅니다 (한글·영문 모두)
+  const wanted = [FIELD.name, FIELD.mokjang.concat(FIELD.soon)];
 
   // 1) 먼저 이 파일 안에서 찾습니다 (AppSheet 시트에서 스크립트를 여신 경우)
   let found = findSourceSheet_(here, wanted);
@@ -1238,7 +1285,7 @@ function 교인_가져오기() {
 
   if (!found) {
     throw new Error('교인 명단 시트를 찾지 못했습니다. ' +
-      'memberID 와 Name 칸이 첫 줄에 있는 시트가 필요합니다.\n' +
+      '첫 줄에 이름 칸과 소속(목장·순) 칸이 있는 시트가 필요합니다.\n' +
       '이 파일의 시트: ' + here.getSheets().map(function (sh) { return sh.getName(); }).join(', ') + '\n' +
       '→ 원본_살펴보기() 를 실행하면 원본 파일의 시트와 칸 이름을 확인할 수 있습니다.');
   }
@@ -1252,25 +1299,31 @@ function 교인_가져오기() {
   let added = 0, updated = 0, skipped = 0;
 
   rows.forEach(function (r) {
-    const id = String(r['memberID'] || '').trim();
-    const name = String(r['Name'] || '').trim();
+    const id = String(pick_(r, FIELD.id)).trim();
+    const name = String(pick_(r, FIELD.name)).trim();
     if (!id || !name) { skipped++; return; }
+
+    const rawStatus = String(pick_(r, FIELD.status)).trim();
+    const memo = [
+      pick_(r, FIELD.family) ? '가족: ' + String(pick_(r, FIELD.family)).trim() : '',
+      String(pick_(r, FIELD.note) || '').trim(),
+      (rawStatus && MEMBER_STATUS.indexOf(rawStatus) < 0) ? '등록구분: ' + rawStatus : ''
+    ].filter(Boolean).join(' / ');
 
     const record = {
       'ID': id,
       '이름': name,
-      '성별': normalizeGender_(r['gender']),
-      '생년월일': toDateStr_(r['Birthday']),
-      '음력': '',
-      '휴대전화': String(r['Phone'] || '').trim(),
-      '목장': String(r['MokName'] || '').trim(),
-      '순': normalizeSoon_(r['SoonName']),
-      '직분': String(r['ChurchRole'] || '').trim(),
-      '등록일': toDateStr_(r['JoinDate']),
+      '성별': normalizeGender_(pick_(r, FIELD.gender)),
+      '생년월일': resolveBirth_(r),
+      '음력': /음/.test(String(pick_(r, FIELD.lunar))) ? '음력' : '',
+      '휴대전화': String(pick_(r, FIELD.phone)).trim(),
+      '목장': String(pick_(r, FIELD.mokjang)).trim(),
+      '순': normalizeSoon_(pick_(r, FIELD.soon)),
+      '직분': String(pick_(r, FIELD.role)).trim(),
+      '등록일': toDateStr_(pick_(r, FIELD.joined)),
       '주소': pickAddress_(r),
-      '상태': MEMBER_STATUS.indexOf(String(r['Status'] || '').trim()) >= 0
-                ? String(r['Status']).trim() : '재적',
-      '메모': r['Family'] ? '가족: ' + String(r['Family']).trim() : '',
+      '상태': MEMBER_STATUS.indexOf(rawStatus) >= 0 ? rawStatus : '재적',
+      '메모': memo,
       '수정일시': stamp
     };
 
@@ -1304,16 +1357,32 @@ function 교인_가져오기() {
   return msg;
 }
 
-/** 머리글에 지정한 칸이 모두 있는 시트를 찾아 [{칸: 값}] 으로 돌려줍니다. */
+/**
+ * 머리글 조건을 만족하는 시트를 찾아 [{칸: 값}] 으로 돌려줍니다.
+ * mustHave 의 각 항목은 '이 중 하나라도 있으면 됨' 이라는 뜻의 후보 목록입니다.
+ *
+ * 조건에 맞는 시트가 여럿일 수 있습니다. 순장 명단 같은 시트에도 이름과
+ * 소속 칸이 있으니까요. 그래서 알아보는 칸이 많고 줄이 많은 쪽을 고릅니다.
+ */
 function findSourceSheet_(ss, mustHave) {
+  // 앱이 쓰는 시트(계정·교인·출결…)는 원본이 될 수 없습니다.
+  // 이름·목장·순 칸이 있어 조건에는 맞지만 가져오기 대상이 아닙니다.
+  const ours = {};
+  Object.keys(SHEETS).forEach(function (k) { ours[SHEETS[k].name] = true; });
+
+  const candidates = [];
   const sheets = ss.getSheets();
   for (let i = 0; i < sheets.length; i++) {
     const sh = sheets[i];
+    if (ours[sh.getName()]) continue;
     if (sh.getLastRow() < 2 || sh.getLastColumn() < 1) continue;
 
     const headers = sh.getRange(1, 1, 1, sh.getLastColumn()).getValues()[0]
       .map(function (h) { return String(h).trim(); });
-    const ok = mustHave.every(function (h) { return headers.indexOf(h) >= 0; });
+    const ok = mustHave.every(function (group) {
+      const names = [].concat(group);
+      return names.some(function (h) { return headers.indexOf(h) >= 0; });
+    });
     if (!ok) continue;
 
     const values = sh.getRange(2, 1, sh.getLastRow() - 1, headers.length).getValues();
@@ -1324,9 +1393,24 @@ function findSourceSheet_(ss, mustHave) {
       headers.forEach(function (h, j) { if (h) obj[h] = row[j]; });
       rows.push(obj);
     });
-    return { name: sh.getName(), rows: rows };
+
+    candidates.push({ name: sh.getName(), rows: rows, score: scoreHeaders_(headers) });
   }
-  return null;
+
+  if (!candidates.length) return null;
+  candidates.sort(function (a, b) {
+    return (b.score - a.score) || (b.rows.length - a.rows.length);
+  });
+  return candidates[0];
+}
+
+/** 우리가 아는 칸 이름이 몇 개나 있는지 세어 명단 시트다움을 가늠합니다. */
+function scoreHeaders_(headers) {
+  let score = 0;
+  Object.keys(FIELD).forEach(function (key) {
+    if (FIELD[key].some(function (h) { return headers.indexOf(h) >= 0; })) score++;
+  });
+  return score;
 }
 
 function normalizeGender_(v) {
@@ -1344,7 +1428,7 @@ function normalizeSoon_(v) {
 }
 
 function pickAddress_(r) {
-  const full = String(r['Adress3'] || r['Address3'] || '').trim();
+  const full = String(pick_(r, FIELD.address)).trim();
   if (full) return full;
   return [r['Adress1'] || r['Address1'], r['Adress2'] || r['Address2']]
     .map(function (x) { return String(x || '').trim(); })
